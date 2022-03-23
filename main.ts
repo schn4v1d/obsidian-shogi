@@ -1,137 +1,235 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { MarkdownPostProcessorContext, Plugin } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
+type ShogiPieceType = "pawn" | "bishop" | "rook" | "lance" | "knight" | "silver" | "gold" | "king";
 
-interface MyPluginSettings {
-	mySetting: string;
+type ShogiPlayer = "sente" | "gote";
+
+interface ShogiPiece {
+	type: ShogiPieceType;
+	promoted: boolean;
+	player: ShogiPlayer;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+function pieceSymbol(piece: ShogiPiece): string {
+	if (piece.promoted) {
+		switch (piece.type) {
+			case "king":
+				return "玉";
+			case "rook":
+				return "龍";
+			case "bishop":
+				return "馬";
+			case "gold":
+				return "金";
+			case "silver":
+				return "全";
+			case "knight":
+				return "圭";
+			case "lance":
+				return "杏";
+			case "pawn":
+				return "と";
+		}
+	} else {
+		switch (piece.type) {
+			case "king":
+				return "王";
+			case "rook":
+				return "飛";
+			case "bishop":
+				return "角";
+			case "gold":
+				return "金";
+			case "silver":
+				return "銀";
+			case "knight":
+				return "桂";
+			case "lance":
+				return "香";
+			case "pawn":
+				return "歩";
+		}
+	}
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+function parsePieceType(pieceType: string): ShogiPieceType {
+	switch (pieceType) {
+		case "p":
+			return "pawn";
+		case "b":
+			return "bishop";
+		case "r":
+			return "rook";
+		case "l":
+			return "lance";
+		case "n":
+			return "knight";
+		case "s":
+			return "silver";
+		case "g":
+			return "gold";
+		case "k":
+			return "king";
+		default:
+			throw Error(`Unknown Piece Type ${pieceType}`);
+	}
+}
 
+function parsePiece(pieceString: string): ShogiPiece | undefined {
+	var player: ShogiPlayer;
+	switch (pieceString[0]) {
+		case "s":
+			player = "sente";
+			break;
+		case "g":
+			player = "gote"
+			break;
+		case " ":
+			return undefined;
+		default:
+			throw Error(`Unknown Piece Color ${pieceString[0]} Expected s (sente) or g (gote)`);
+	}
+
+	var type: ShogiPieceType = parsePieceType(pieceString[1].toLowerCase());
+
+
+	var promoted = pieceString[1].toUpperCase() === pieceString[1];
+
+	return {
+		type,
+		promoted,
+		player,
+	}
+}
+
+interface ParsedShogiCode {
+	board: (ShogiPiece | undefined)[][];
+	senteHand: ShogiPieceType[];
+	goteHand: ShogiPieceType[];
+}
+
+export default class ObsidianShogi extends Plugin {
 	async onload() {
-		await this.loadSettings();
+		this.registerMarkdownCodeBlockProcessor(
+			"shogi",
+			this.drawShogiBoard()
+		);
+	}
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+	private tableCell(piece: boolean = false): HTMLTableCellElement {
+		const cell = document.createElement("td");
+		cell.style.width = "1.5em";
+		cell.style.height = "1.5em";
+		cell.style.textAlign = "center";
+		cell.style.padding = "0";
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		if (piece) {
+			cell.style.border = "1px solid var(--text-normal)";
+		} else {
+			cell.style.border = "none";
+		}
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
+		return cell;
+	}
+
+	private drawShogiBoard() {
+		return (source: string, el: HTMLElement, _: MarkdownPostProcessorContext) => {
+			const div = document.createElement("div");
+			div.style.display = "flex";
+			div.style.flexDirection = "column";
+			div.style.alignItems = "center";
+
+			const board = ObsidianShogi.parseCode(source);
+
+			const goteHand = document.createElement("span");
+			goteHand.style.fontSize = "var(--font-small)";
+			goteHand.textContent = "Gote pieces in hand: " + (board.goteHand.length === 0 ? "-" : board.goteHand.map(type => pieceSymbol({ promoted: false, player: "sente", type })).join(" "));
+			div.appendChild(goteHand);
+
+			const table = document.createElement("table");
+			table.classList.add("shogi-board");
+
+			const tbody = document.createElement("tbody");
+
+			const headerRow = document.createElement("tr");
+
+			for (let i = 9; i > 0; i--) {
+				const columnNumber = this.tableCell();
+				columnNumber.textContent = String(i);
+				headerRow.appendChild(columnNumber);
 			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
+
+			const corner = this.tableCell();
+			headerRow.appendChild(corner);
+
+			tbody.appendChild(headerRow);
+
+			board.board.forEach((rowPieces, i) => {
+				const row = document.createElement("tr");
+
+				rowPieces.forEach((piece) => {
+					const cell = this.tableCell(true);
+
+					if (piece !== undefined) {
+						if (piece.promoted && piece.type != "king") {
+							cell.style.color = "var(--red)";
+						}
+
+						if (piece.player == "gote") {
+							cell.style.transform = "rotate(180deg)";
+						}
+
+						cell.textContent = pieceSymbol(piece);
 					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+					row.appendChild(cell);
+				})
+
+				const rowNumber = this.tableCell();
+				rowNumber.textContent = String(i + 1);
+				row.appendChild(rowNumber);
+
+				tbody.appendChild(row);
+			});
+
+			table.appendChild(tbody);
+			div.appendChild(table);
+
+			const senteHand = document.createElement("span");
+			senteHand.style.fontSize = "var(--font-small)";
+			senteHand.textContent = "Sente pieces in hand: " + (board.senteHand.length === 0 ? "-" : board.senteHand.map(type => pieceSymbol({ promoted: false, player: "sente", type })).join(" "));
+			div.appendChild(senteHand);
+
+			el.appendChild(div);
+		}
+	}
+
+	private static parseCode(input: string): ParsedShogiCode {
+		const lines = input.split(/\r?\n/);
+
+		const goteHand = lines[0].trim().split("").map(c => parsePieceType(c));
+		const senteHand = lines[10].trim().split("").map(c => parsePieceType(c));
+
+		const boardLines = lines.slice(1, 10);
+		const board = new Array(9).fill(true).map(() => new Array(9).fill(undefined));
+
+		for (let i = 0; i < 9; i++) {
+			const line = boardLines[i];
+
+			line.split("|").map(s => s.trim()).forEach((pieceString, j) => {
+				if (pieceString.length >= 2) {
+
+					const piece = parsePiece(pieceString);
+
+					board[i][j] = piece;
 				}
-			}
-		});
+			});
+		}
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
-
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		containerEl.createEl('h2', {text: 'Settings for my awesome plugin.'});
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					console.log('Secret: ' + value);
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+		return {
+			board,
+			senteHand,
+			goteHand,
+		};
 	}
 }
